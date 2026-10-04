@@ -724,12 +724,27 @@ endif()
 
 if(WITH_APPLE_CROSSPLATFORM)
   if(APPLE_TARGET_IOS)
+    set(BLENDER_IOS_BUNDLE_ID "org.blenderfoundation.blender" CACHE STRING
+      "Bundle identifier for a personal iOS build")
+    set(BLENDER_IOS_DEVELOPMENT_TEAM "" CACHE STRING
+      "Apple development team used to sign the iOS app")
+    option(BLENDER_IOS_INCREASED_MEMORY_LIMIT
+      "Request the increased-memory-limit entitlement on supported iPads" ON)
+    set(CMAKE_XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "${BLENDER_IOS_BUNDLE_ID}")
+    if(BLENDER_IOS_DEVELOPMENT_TEAM)
+      set(CMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM "${BLENDER_IOS_DEVELOPMENT_TEAM}")
+      set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Automatic")
+    endif()
     set(CMAKE_XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2")
     set(CMAKE_XCODE_ATTRIBUTE_SUPPORTS_MACCATALYST NO)
     set(CMAKE_XCODE_ATTRIBUTE_SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD NO)
 
     # Entitlements file reference
     # `release/ios` is hardcoded since we want to use the same entitlements for both iOS-Simulator and normal iOS builds.
-    set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS "${CMAKE_SOURCE_DIR}/release/ios/entitlements.plist")
+    if(BLENDER_IOS_INCREASED_MEMORY_LIMIT)
+      set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS "${CMAKE_SOURCE_DIR}/release/ios/entitlements.plist")
+    else()
+      set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS "${CMAKE_SOURCE_DIR}/release/ios/entitlements-personal.plist")
+    endif()
   endif()
 endif()

@@ -36,7 +36,7 @@
 	<key>CFBundleIconFile</key>
 	<string>Assets/blender_icon.icns</string>
 	<key>CFBundleIdentifier</key>
-	<string>org.blenderfoundation.blender</string>
+	<string>${BLENDER_IOS_BUNDLE_ID}</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
