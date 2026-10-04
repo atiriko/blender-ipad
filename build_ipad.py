@@ -39,6 +39,9 @@ def main():
     if args.stage == "setup":
         run(["git", "lfs", "version"], SOURCE)
         run(["git", "lfs", "install", "--local"], SOURCE)
+        # GitHub mirrors do not host Blender's upstream LFS assets.
+        run(["git", "config", "--local", "lfs.url",
+             "https://projects.blender.org/blender/blender.git/info/lfs"], SOURCE)
         run(["git", "lfs", "pull"], SOURCE)
         # Fetch exact gitlink revisions, rather than updating the source or library branches.
         libraries = ["lib/macos_arm64", "lib/ios_arm64"]

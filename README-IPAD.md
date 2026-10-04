@@ -31,7 +31,8 @@ python3 build_ipad.py configure --bundle-id personal.yourname.blender
 open ../build_ios/Blender.xcodeproj
 ```
 
-`setup` downloads LFS assets and both macOS and iOS dependency repositories at the
+`setup` configures the official Blender LFS server for upstream assets (the GitHub
+mirror does not host them) and downloads both macOS and iOS dependencies at the
 revisions recorded by this checkout. It does not update the Blender branch.
 Expect substantial downloads and build disk usage.
 
