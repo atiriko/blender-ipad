@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
 #include "GHOST_SystemIOS.hh"
+#include "GHOST_IOS.hh"
 
 #include "GHOST_ContextIOS.hh"
 #include "GHOST_WindowIOS.hh"
@@ -763,6 +764,66 @@ GHOST_TSuccess GHOST_SystemIOS::startSecurityScopedFileAccess(const char *filepa
   BOOL success = [url startAccessingSecurityScopedResource];
 
   return success ? GHOST_kSuccess : GHOST_kFailure;
+}
+
+GHOST_TSuccess GHOST_shareFileIOS(const char *filepath)
+{
+  if (!filepath || !filepath[0]) {
+    return GHOST_kFailure;
+  }
+  NSString *path = [NSString stringWithUTF8String:filepath];
+  BOOL is_directory = NO;
+  NSFileManager *files = [NSFileManager defaultManager];
+  if (!path || ![files fileExistsAtPath:path isDirectory:&is_directory] || is_directory ||
+      ![files isReadableFileAtPath:path])
+  {
+    return GHOST_kFailure;
+  }
+  NSURL *url = [NSURL fileURLWithPath:path];
+
+  /* File-browser windows can close after the operator returns. Resolve the
+   * current presenter on the next UI turn, without retaining a GHOST window. */
+  dispatch_async(dispatch_get_main_queue(), ^{
+    UIViewController *presenter = nil;
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+      if (scene.activationState != UISceneActivationStateForegroundActive ||
+          ![scene isKindOfClass:[UIWindowScene class]])
+      {
+        continue;
+      }
+      for (UIWindow *ui_window in ((UIWindowScene *)scene).windows) {
+        if (ui_window.isKeyWindow) {
+          presenter = ui_window.rootViewController;
+          break;
+        }
+      }
+      if (presenter) {
+        break;
+      }
+    }
+    while (presenter.presentedViewController) {
+      presenter = presenter.presentedViewController;
+    }
+    if (!presenter || [presenter isKindOfClass:[UIActivityViewController class]]) {
+      NSLog(@"Blender: saved file remains at %@; no share-sheet presenter available", path);
+      return;
+    }
+
+    UIActivityViewController *activity = [[UIActivityViewController alloc]
+        initWithActivityItems:@[ url ]
+        applicationActivities:nil];
+    /* iPad requires a popover anchor, including when no toolbar button exists. */
+    UIPopoverPresentationController *popover = activity.popoverPresentationController;
+    popover.sourceView = presenter.view;
+    popover.sourceRect = CGRectMake(CGRectGetMidX(presenter.view.bounds),
+                                    CGRectGetMidY(presenter.view.bounds),
+                                    1,
+                                    1);
+    popover.permittedArrowDirections = 0;
+    [presenter presentViewController:activity animated:YES completion:nil];
+    [activity release];
+  });
+  return GHOST_kSuccess;
 }
 
 GHOST_TSuccess GHOST_SystemIOS::stopSecurityScopedFileAccess(const char *filepath)

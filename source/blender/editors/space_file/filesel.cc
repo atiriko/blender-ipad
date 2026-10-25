@@ -224,6 +224,15 @@ static FileSelectParams *fileselect_ensure_updated_file_params(SpaceFile *sfile)
     }
     if ((prop = RNA_struct_find_property(op->ptr, "check_existing"))) {
       params->flag |= RNA_property_boolean_get(op->ptr, prop) ? int(FILE_CHECK_EXISTING) : 0;
+#ifdef WITH_APPLE_CROSSPLATFORM
+      /* Desktop recent paths and app resources cannot be used as iPad save destinations. */
+      if (RNA_property_boolean_get_default(op->ptr, prop) &&
+          (!BLI_is_dir(params->dir) || !BLI_file_is_writable(params->dir)))
+      {
+        BLI_strncpy(params->dir, BKE_appdir_folder_default_or_root(), sizeof(params->dir));
+        BLI_path_normalize_dir(params->dir, sizeof(params->dir));
+      }
+#endif
     }
     if ((prop = RNA_struct_find_property(op->ptr, "hide_props_region"))) {
       params->flag |= RNA_property_boolean_get(op->ptr, prop) ? int(FILE_HIDE_TOOL_PROPS) : 0;

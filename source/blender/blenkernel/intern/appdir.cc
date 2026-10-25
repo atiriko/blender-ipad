@@ -138,7 +138,16 @@ static char *blender_version_decimal(const int version)
 
 const char *BKE_appdir_folder_default()
 {
-#ifndef WIN32
+#ifdef WITH_APPLE_CROSSPLATFORM
+  static std::string documents;
+  const std::optional<std::string> path = GHOST_ISystemPaths::get()->getUserSpecialDir(
+      GHOST_kUserSpecialDirDocuments);
+  if (path && BLI_is_dir(path->c_str())) {
+    documents = *path;
+    return documents.c_str();
+  }
+  return BLI_dir_home();
+#elif !defined(WIN32)
   return BLI_dir_home();
 #else  /* Windows */
   static char documentfolder[FILE_MAXDIR];
@@ -164,14 +173,6 @@ const char *BKE_appdir_folder_root()
 
 const char *BKE_appdir_folder_default_or_root()
 {
-#ifdef WITH_APPLE_CROSSPLATFORM
-  const std::optional<std::string> def_path = BKE_appdir_resource_path_id_with_version(
-      BLENDER_RESOURCE_PATH_LOCAL, true, BLENDER_VERSION);
-  if (def_path.has_value()) {
-    return def_path->c_str();
-  }
-#endif
-
   const char *path = BKE_appdir_folder_default();
   if (path == nullptr) {
     path = BKE_appdir_folder_root();
@@ -181,11 +182,7 @@ const char *BKE_appdir_folder_default_or_root()
 
 const char *BKE_appdir_folder_home()
 {
-#ifdef WITH_APPLE_CROSSPLATFORM
-  return BKE_appdir_folder_default_or_root();
-#else
   return BLI_dir_home();
-#endif
 }
 
 bool BKE_appdir_folder_documents(char *dir)

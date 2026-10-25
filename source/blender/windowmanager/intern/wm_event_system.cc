@@ -27,11 +27,16 @@
 #include "CLG_log.h"
 
 #include "GHOST_ISystem.hh"
+#ifdef WITH_APPLE_CROSSPLATFORM
+#  include "GHOST_IOS.hh"
+#endif
 
 #include "BLI_enum_flags.hh"
+#include "BLI_fileops.h"
 #include "BLI_ghash.h"
 #include "BLI_listbase.h"
 #include "BLI_math_vector.h"
+#include "BLI_path_utils.hh"
 #include "BLI_string.h"
 #include "BLI_string_utf8.h"
 #include "BLI_timer.h"
@@ -2827,6 +2832,28 @@ static void wm_operator_free_for_fileselect(wmOperator *file_operator)
   WM_operator_free(file_operator);
 }
 
+#ifdef WITH_APPLE_CROSSPLATFORM
+static void wm_operator_file_share(wmOperator *op, const wmOperatorStatus retval)
+{
+  /* Share completed save/export operations, never imports or failed writes.
+   * Cancelling the native sheet must leave the local file intact. */
+  PropertyRNA *save_prop = RNA_struct_find_property(op->ptr, "check_existing");
+  PropertyRNA *path_prop = RNA_struct_find_property(op->ptr, "filepath");
+  if ((retval & OPERATOR_FINISHED) && save_prop && path_prop &&
+      RNA_property_boolean_get_default(op->ptr, save_prop))
+  {
+    char filepath[FILE_MAX];
+    RNA_property_string_get(op->ptr, path_prop, filepath);
+    BLI_path_abs(filepath, BKE_main_blendfile_path_from_global());
+    if (BLI_is_file(filepath) &&
+        GHOST_shareFileIOS(filepath) != GHOST_kSuccess)
+    {
+      BKE_report(op->reports, RPT_WARNING, "File saved, but sharing is unavailable");
+    }
+  }
+}
+#endif
+
 /**
  * File-select handlers are only in the window queue,
  * so it's safe to switch screens or area types.
@@ -2960,6 +2987,10 @@ static eHandlerActionFlag wm_handler_fileselect_do(bContext *C,
 
         const wmOperatorStatus retval = handler->op->type->exec(C, handler->op);
         OPERATOR_RETVAL_CHECK(retval);
+
+#ifdef WITH_APPLE_CROSSPLATFORM
+        wm_operator_file_share(handler->op, retval);
+#endif
 
         /* XXX check this carefully, `CTX_wm_manager(C) == wm` is a bit hackish. */
         if (handler->op->type->flag & OPTYPE_UNDO && CTX_wm_manager(C) == wm) {
