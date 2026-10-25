@@ -21,6 +21,8 @@
 #import <UIKit/UIKit.h>
 #import <UIKit/UIPencilInteraction.h>
 
+#include <algorithm>
+#include <cmath>
 #include <unordered_map>
 
 // #define IOS_INPUT_LOGGING
@@ -70,7 +72,7 @@ typedef struct UserInputEvent {
 
   void add_event(EventTypes event_type)
   {
-    GHOST_ASSERT(num_events <= sizeof(event_list) / sizeof(*event_list),
+    GHOST_ASSERT(num_events < sizeof(event_list) / sizeof(*event_list),
                  "add_event: Failed to add event");
     event_list[num_events] = event_type;
     num_events++;
@@ -250,6 +252,7 @@ typedef struct UserInputEvent {
   UITouch *current_pencil_touch;
   GHOST_TabletData tablet_data;
   bool last_tap_with_pencil;
+  bool finger_drag_active;
 
   /* Keyboard handling. */
   UITextField *text_field;
@@ -272,6 +275,12 @@ typedef struct UserInputEvent {
 
 /* Blender event generation. */
 - (void)generateUserInputEvents:(const UserInputEvent &)event_info;
+- (void)updatePencilData:(UITouch *)touch;
+- (void)setFingerGesturesEnabled:(BOOL)enabled;
+- (void)sendPencilMove:(UITouch *)touch;
+- (void)finishPencilTouch;
+- (void)cancelActiveInput;
+- (void)applicationWillResignActive:(NSNotification *)notification;
 
 /* Gesture recognizers. */
 - (void)registerGestureRecognizers;
@@ -305,7 +314,13 @@ typedef struct UserInputEvent {
   toolbar_enabled = true;
   toolbar = nil;
   last_tap_with_pencil = false;
+  finger_drag_active = false;
   external_keyboard_connected = [GCKeyboard coalescedKeyboard] != nil;
+
+  [[NSNotificationCenter defaultCenter] addObserver:self
+                                           selector:@selector(applicationWillResignActive:)
+                                               name:UIApplicationWillResignActiveNotification
+                                             object:nil];
 
   /* Register for notifications of chnanges to the onscreen keyboard. */
   [[NSNotificationCenter defaultCenter] addObserver:self
@@ -345,7 +360,7 @@ typedef struct UserInputEvent {
               action:@selector(handleTap:)];
   tap_gesture_recognizer.delegate = self;
   tap_gesture_recognizer.cancelsTouchesInView = false;
-  tap_gesture_recognizer.allowedTouchTypes = @[ @(UITouchTypePencil), @(UITouchTypeDirect) ];
+  tap_gesture_recognizer.allowedTouchTypes = @[ @(UITouchTypeDirect) ];
   [window->getView() addGestureRecognizer:tap_gesture_recognizer];
 
   /* Two-finger tap gesture recognizer. */
@@ -353,6 +368,7 @@ typedef struct UserInputEvent {
       initWithTarget:self
               action:@selector(handleTap2F:)];
   tap2f_gesture_recognizer.delegate = self;
+  tap2f_gesture_recognizer.allowedTouchTypes = @[ @(UITouchTypeDirect) ];
   tap2f_gesture_recognizer.cancelsTouchesInView = false;
   tap2f_gesture_recognizer.delaysTouchesBegan = YES;
   tap2f_gesture_recognizer.numberOfTouchesRequired = 2;
@@ -363,6 +379,7 @@ typedef struct UserInputEvent {
       initWithTarget:self
               action:@selector(handleTap3F:)];
   tap3f_gesture_recognizer.delegate = self;
+  tap3f_gesture_recognizer.allowedTouchTypes = @[ @(UITouchTypeDirect) ];
   tap3f_gesture_recognizer.cancelsTouchesInView = false;
   tap3f_gesture_recognizer.delaysTouchesBegan = YES;
   tap3f_gesture_recognizer.numberOfTouchesRequired = 3;
@@ -373,6 +390,7 @@ typedef struct UserInputEvent {
       initWithTarget:self
               action:@selector(handleTap4F:)];
   tap4f_gesture_recognizer.delegate = self;
+  tap4f_gesture_recognizer.allowedTouchTypes = @[ @(UITouchTypeDirect) ];
   tap4f_gesture_recognizer.cancelsTouchesInView = false;
   tap4f_gesture_recognizer.delaysTouchesBegan = YES;
   tap4f_gesture_recognizer.numberOfTouchesRequired = 4;
@@ -387,8 +405,8 @@ typedef struct UserInputEvent {
   /* Allow scrolling only with a single finger. */
   pan_gesture_recognizer.minimumNumberOfTouches = 1;
   pan_gesture_recognizer.maximumNumberOfTouches = 1;
-  /* Allow finger and pencil. */
-  pan_gesture_recognizer.allowedTouchTypes = @[ @(UITouchTypePencil), @(UITouchTypeDirect) ];
+  /* Pencil strokes are handled directly by the touch callbacks. */
+  pan_gesture_recognizer.allowedTouchTypes = @[ @(UITouchTypeDirect) ];
   [window->getView() addGestureRecognizer:pan_gesture_recognizer];
 
   /* Pan gesture recognizer - two fingers 3D UI. */
@@ -396,6 +414,7 @@ typedef struct UserInputEvent {
       initWithTarget:self
               action:@selector(handlePan2f:)];
   pan2f_gesture_recognizer.delegate = self;
+  pan2f_gesture_recognizer.allowedTouchTypes = @[ @(UITouchTypeDirect) ];
   pan2f_gesture_recognizer.cancelsTouchesInView = false;
   /* Two finger gestures only.  */
   pan2f_gesture_recognizer.minimumNumberOfTouches = 2;
@@ -407,6 +426,7 @@ typedef struct UserInputEvent {
       initWithTarget:self
               action:@selector(handleZoom:)];
   zoom_gesture_recognizer.delegate = self;
+  zoom_gesture_recognizer.allowedTouchTypes = @[ @(UITouchTypeDirect) ];
   zoom_gesture_recognizer.cancelsTouchesInView = false;
   [window->getView() addGestureRecognizer:zoom_gesture_recognizer];
 
@@ -416,6 +436,7 @@ typedef struct UserInputEvent {
               action:@selector(handleEdgeSwipe:)];
   edge_swipe_left.edges = UIRectEdgeLeft;
   edge_swipe_left.delegate = self;
+  edge_swipe_left.allowedTouchTypes = @[ @(UITouchTypeDirect) ];
   [window->getView() addGestureRecognizer:edge_swipe_left];
 
   edge_swipe_right = [[UIScreenEdgePanGestureRecognizer alloc]
@@ -423,6 +444,7 @@ typedef struct UserInputEvent {
               action:@selector(handleEdgeSwipe:)];
   edge_swipe_right.edges = UIRectEdgeRight;
   edge_swipe_right.delegate = self;
+  edge_swipe_right.allowedTouchTypes = @[ @(UITouchTypeDirect) ];
   [window->getView() addGestureRecognizer:edge_swipe_right];
 
   /* Apple Pencil hover recognizer. */
@@ -447,6 +469,10 @@ typedef struct UserInputEvent {
 {
   /* Lock access to ensure all input-events are received sequentially. */
   @synchronized(self) {
+    /* Finger navigation must not modify an active Pencil stroke. */
+    if (current_pencil_touch && !event_info.pencil_used) {
+      return;
+    }
     for (int i = 0; i < event_info.num_events; i++) {
       UserInputEvent::EventTypes event_type = event_info.event_list[i];
       IOS_INPUT_LOG(@"%d-%@ %f,%f",
@@ -518,6 +544,11 @@ typedef struct UserInputEvent {
                                                                 window,
                                                                 GHOST_kButtonMaskRight,
                                                                 tablet_data));
+          system->pushEvent(std::make_unique<GHOST_EventButton>(system->getMilliSeconds(),
+                                                                GHOST_kEventButtonUp,
+                                                                window,
+                                                                GHOST_kButtonMaskRight,
+                                                                tablet_data));
           break;
         default:
           GHOST_ASSERT(FALSE, "GHOST_SystemIOS::generateUserInputEvents unsupported event type");
@@ -544,74 +575,145 @@ typedef struct UserInputEvent {
   return NO;
 }
 
-/* Override touch methods to capture the UITouch object. */
+/* Cancel pending palm/finger gestures so they cannot fire after Pencil release. */
+- (void)setFingerGesturesEnabled:(BOOL)enabled
+{
+  for (UIGestureRecognizer *recognizer in @[
+         tap_gesture_recognizer,
+         tap2f_gesture_recognizer,
+         tap3f_gesture_recognizer,
+         tap4f_gesture_recognizer,
+         pan_gesture_recognizer,
+         pan2f_gesture_recognizer,
+         zoom_gesture_recognizer,
+         edge_swipe_left,
+         edge_swipe_right
+       ])
+  {
+    recognizer.enabled = enabled;
+  }
+}
+
+/* Keep each Pencil sample's position and tablet data together. */
+- (void)updatePencilData:(UITouch *)touch
+{
+  tablet_data.Active = GHOST_kTabletModeStylus;
+  const CGFloat maximum_force = touch.maximumPossibleForce;
+  const CGFloat pressure = maximum_force > 0 ? touch.force / maximum_force : 0;
+  tablet_data.Pressure = std::isfinite(pressure) ? std::clamp(pressure, CGFloat(0), CGFloat(1)) : 0;
+  const CGFloat azimuth = [touch azimuthAngleInView:window->getView()];
+  const CGFloat altitude = touch.altitudeAngle;
+  tablet_data.Xtilt = sin(azimuth) * cos(altitude);
+  tablet_data.Ytilt = -cos(azimuth) * cos(altitude);
+}
+
+- (void)sendPencilMove:(UITouch *)touch
+{
+  [self updatePencilData:touch];
+  CGPoint point = [touch preciseLocationInView:window->getView()];
+  point = window->scalePointToWindow(point);
+  UserInputEvent input(&point, nullptr, nullptr, true);
+  input.add_event(UserInputEvent::CURSOR_MOVE);
+  [self generateUserInputEvents:input];
+}
+
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event
 {
   [super touchesBegan:touches withEvent:event];
-
   for (UITouch *touch in touches) {
-    if (touch.type == UITouchTypePencil) {
-      current_pencil_touch = touch;
-      break;
+    if (touch.type != UITouchTypePencil || current_pencil_touch) {
+      continue;
     }
+    /* Finish a preceding finger drag before handing the button to the Pencil. */
+    if (finger_drag_active) {
+      UserInputEvent release(nullptr, nullptr, nullptr, false);
+      release.add_event(UserInputEvent::LEFT_BUTTON_UP);
+      [self generateUserInputEvents:release];
+      finger_drag_active = false;
+    }
+    [self setFingerGesturesEnabled:NO];
+    current_pencil_touch = touch;
+    last_tap_with_pencil = true;
+    [self sendPencilMove:touch];
+    UserInputEvent input(nullptr, nullptr, nullptr, true);
+    input.add_event(UserInputEvent::LEFT_BUTTON_DOWN);
+    [self generateUserInputEvents:input];
+    break;
   }
 }
 
-/* Get updated tablet data. */
 - (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event
 {
   [super touchesMoved:touches withEvent:event];
-
-  /* Check if one of the touches was from a pencil. */
-  if (current_pencil_touch) {
-    /* Iterate through all pencil touches. */
-    for (UITouch *touch in touches) {
-      if (touch.type == UITouchTypePencil) {
-        current_pencil_touch = touch;
-
-        tablet_data.Active = GHOST_kTabletModeStylus;
-
-        /* Map apple pessure Range to Blender range: 0.0 (not touching) to 1.0 (full pressure). */
-        tablet_data.Pressure = current_pencil_touch.force /
-                               current_pencil_touch.maximumPossibleForce;
-
-        CGFloat azimuthAngle = [current_pencil_touch azimuthAngleInView:window->getView()];
-        CGFloat altitudeAngle = [current_pencil_touch altitudeAngle];
-
-        /* Calculate the maximum possible tilt (1.0) when altitude is 0. */
-        CGFloat maxTilt = cos(0);
-
-        /* Convert to x and y tilt - range -1.0 (left) to +1.0 (right). */
-        tablet_data.Xtilt = sin(azimuthAngle) * cos(altitudeAngle) / maxTilt;
-        tablet_data.Ytilt = -cos(azimuthAngle) * cos(altitudeAngle) / maxTilt;
-        IOS_INPUT_LOG(
-            @"TABLET: X:%f,Y:%f,P:%f", tablet_data.Xtilt, tablet_data.Ytilt, tablet_data.Pressure);
-        break;
-      }
+  if (!current_pencil_touch || ![touches containsObject:current_pencil_touch]) {
+    return;
+  }
+  /* UIKit includes the current sample in the coalesced array. */
+  NSArray<UITouch *> *samples = [event coalescedTouchesForTouch:current_pencil_touch];
+  if (samples.count == 0) {
+    [self sendPencilMove:current_pencil_touch];
+  }
+  else {
+    for (UITouch *sample in samples) {
+      [self sendPencilMove:sample];
     }
   }
 }
 
-/* Reset tablet data. */
-- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event
+- (void)finishPencilTouch
 {
-  [super touchesEnded:touches withEvent:event];
+  UserInputEvent input(nullptr, nullptr, nullptr, true);
+  input.add_event(UserInputEvent::LEFT_BUTTON_UP);
+  [self generateUserInputEvents:input];
   current_pencil_touch = nil;
+  tablet_data = GHOST_TABLET_DATA_NONE;
+  [self setFingerGesturesEnabled:YES];
+}
+
+- (void)applicationWillResignActive:(NSNotification *)notification
+{
+  [self cancelActiveInput];
+}
+
+/* An interruption may arrive without a final touch callback. */
+- (void)cancelActiveInput
+{
+  if (current_pencil_touch) {
+    [self finishPencilTouch];
+  }
+  if (finger_drag_active) {
+    UserInputEvent input(nullptr, nullptr, nullptr, false);
+    input.add_event(UserInputEvent::LEFT_BUTTON_UP);
+    [self generateUserInputEvents:input];
+    finger_drag_active = false;
+  }
   tablet_data = GHOST_TABLET_DATA_NONE;
 }
 
-/* Reset tablet data. */
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event
+{
+  [super touchesEnded:touches withEvent:event];
+  if (current_pencil_touch && [touches containsObject:current_pencil_touch]) {
+    [self sendPencilMove:current_pencil_touch];
+    [self finishPencilTouch];
+  }
+}
+
 - (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event
 {
   [super touchesCancelled:touches withEvent:event];
-  current_pencil_touch = nil;
-  tablet_data = GHOST_TABLET_DATA_NONE;
+  if (current_pencil_touch && [touches containsObject:current_pencil_touch]) {
+    [self finishPencilTouch];
+  }
 }
 
 - (void)handleTap:(GHOSTUITapGestureRecognizer *)sender
 {
+  if (current_pencil_touch) {
+    return;
+  }
   CGPoint touch_point = [sender getScaledTouchPoint:window];
-  last_tap_with_pencil = current_pencil_touch ? true : false;
+  last_tap_with_pencil = false;
   UserInputEvent event_info(&touch_point, nullptr, nullptr, last_tap_with_pencil);
 
   /* Send events to indicate a 'click' on event end. */
@@ -626,6 +728,9 @@ typedef struct UserInputEvent {
 
 - (void)handleTap2F:(GHOSTUITapGestureRecognizer *)sender
 {
+  if (current_pencil_touch) {
+    return;
+  }
   if (sender.state != UIGestureRecognizerStateEnded) {
     return;
   }
@@ -641,6 +746,9 @@ typedef struct UserInputEvent {
 
 - (void)handleTap3F:(GHOSTUITapGestureRecognizer *)sender
 {
+  if (current_pencil_touch) {
+    return;
+  }
   if (sender.state != UIGestureRecognizerStateEnded) {
     return;
   }
@@ -656,6 +764,9 @@ typedef struct UserInputEvent {
 
 - (void)handleTap4F:(GHOSTUITapGestureRecognizer *)sender
 {
+  if (current_pencil_touch) {
+    return;
+  }
   if (sender.state != UIGestureRecognizerStateEnded) {
     return;
   }
@@ -671,9 +782,12 @@ typedef struct UserInputEvent {
 
 - (void)handlePan:(GHOSTUIPanGestureRecognizer *)sender
 {
+  if (current_pencil_touch) {
+    return;
+  }
   CGPoint touch_point = [sender getScaledTouchPoint:window];
   CGPoint translation = [sender getScaledTranslation:window];
-  bool pencil_pan = current_pencil_touch ? true : false;
+  bool pencil_pan = false;
 
   UserInputEvent event_info(&touch_point, nullptr, nullptr, pencil_pan);
 
@@ -682,6 +796,7 @@ typedef struct UserInputEvent {
   {
     /* Register initial click for click and drag support. */
     if (sender.state == UIGestureRecognizerStateBegan) {
+      finger_drag_active = true;
       /* Set inital translation */
       [sender setCachedTranslation:translation];
       event_info.add_event(UserInputEvent::EventTypes::CURSOR_MOVE);
@@ -709,7 +824,10 @@ typedef struct UserInputEvent {
       sender.state == UIGestureRecognizerStateCancelled ||
       sender.state == UIGestureRecognizerStateFailed)
   {
-    event_info.add_event(UserInputEvent::EventTypes::LEFT_BUTTON_UP);
+    if (finger_drag_active) {
+      event_info.add_event(UserInputEvent::EventTypes::LEFT_BUTTON_UP);
+      finger_drag_active = false;
+    }
   }
   [self generateUserInputEvents:event_info];
 }
@@ -731,7 +849,7 @@ typedef struct UserInputEvent {
     /* Generate pan event if translation is non zero. */
     if (!CGPointEqualToPoint(relative_translation, CGPointMake(0.0f, 0.0f))) {
       CGPoint touch_point = [sender getScaledTouchPoint:window];
-      bool pencil_pan = current_pencil_touch ? true : false;
+      bool pencil_pan = false;
       UserInputEvent event_info(&touch_point, &relative_translation, nullptr, pencil_pan);
       event_info.add_event(UserInputEvent::EventTypes::PAN_GESTURE_TWO_FINGERS);
       [self generateUserInputEvents:event_info];
@@ -748,6 +866,9 @@ typedef struct UserInputEvent {
 
 - (void)handleEdgeSwipe:(UIScreenEdgePanGestureRecognizer *)gesture
 {
+  if (current_pencil_touch) {
+    return;
+  }
   if (gesture.state != UIGestureRecognizerStateEnded) {
     return;
   }
@@ -775,6 +896,9 @@ typedef struct UserInputEvent {
 
 - (void)handleHover:(GHOSTUIHoverGestureRecognizer *)sender
 {
+  if (current_pencil_touch) {
+    return;
+  }
   if (sender.state == UIGestureRecognizerStateBegan ||
       sender.state == UIGestureRecognizerStateChanged)
   {
@@ -1919,6 +2043,8 @@ void GHOST_WindowIOS::resignKeyWindow()
                "GHOST_WindowIOS::resignKeyWindow(): Can't resign non active window");
   GHOST_ASSERT(!request_to_make_active_,
                "GHOST_WindowIOS::resignKeyWindow(): activation request outstanding");
+
+  [(GHOSTUIWindow *)rootWindow cancelActiveInput];
 
   /* Disable the drawInMTKView() calls for this window. */
   metal_view_.paused = YES;

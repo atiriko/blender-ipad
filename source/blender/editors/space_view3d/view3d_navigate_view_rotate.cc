@@ -370,8 +370,11 @@ static wmOperatorStatus viewrotate_invoke_impl(bContext *C,
 static wmOperatorStatus viewrotate_invoke(bContext *C, wmOperator *op, const wmEvent *event)
 {
 #ifdef WITH_APPLE_CROSSPLATFORM
-  /* Only scroll view with multiple fingers on iOS. */
-  if (!(event->flag & WM_EVENT_MULTITOUCH_TWO_FINGERS)) {
+  /* Restrict scrolling gestures to multiple fingers. Direct gizmo drags from
+   * Pencil or a mouse do not carry the multitouch flag. */
+  if (ELEM(event->type, MOUSEPAN, MOUSEROTATE) &&
+      !(event->flag & WM_EVENT_MULTITOUCH_TWO_FINGERS))
+  {
     return OPERATOR_FINISHED;
   }
 #endif
