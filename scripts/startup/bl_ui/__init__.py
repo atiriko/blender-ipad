@@ -97,6 +97,10 @@ _modules = [
 ]
 
 import bpy
+import sys
+
+if sys.platform == 'ios':
+    _modules.append("space_view3d_ipad")
 
 if bpy.app.build_options.freestyle:
     _modules.append("properties_freestyle")
@@ -123,6 +127,9 @@ def register():
             register_class(cls)
 
     space_filebrowser.register_props()
+
+    if sys.platform == 'ios':
+        space_view3d_ipad.register_props()
 
     from bpy.props import (
         EnumProperty,
@@ -185,6 +192,8 @@ def register():
 
 def unregister():
     from bpy.utils import unregister_class
+    if sys.platform == 'ios':
+        space_view3d_ipad.unregister_props()
     for mod in reversed(_modules_loaded):
         for cls in reversed(mod.classes):
             if cls.is_registered:
