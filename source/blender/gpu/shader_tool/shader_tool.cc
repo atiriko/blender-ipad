@@ -22,6 +22,9 @@ static std::vector<std::string> list_files(const std::string &dir)
   std::vector<std::string> files;
   for (const auto &entry : std::filesystem::directory_iterator(std::filesystem::path(dir))) {
     if (entry.is_regular_file()) {
+      if (entry.path().filename().string().starts_with("._")) {
+        continue;
+      }
       std::string filename(entry.path().string());
       /* We only allow including header files or shader files. */
       if (filename.find(".hh") != std::string::npos ||
@@ -51,7 +54,7 @@ static std::vector<metadata::Symbol> scan_external_symbols(
   for (const auto &dep : include_data.dependencies) {
     std::string file;
     for (const auto &filename : file_list) {
-      if (filename.find(dep) != std::string::npos) {
+      if (std::filesystem::path(filename).filename() == std::filesystem::path(dep).filename()) {
         file = filename;
       }
     }

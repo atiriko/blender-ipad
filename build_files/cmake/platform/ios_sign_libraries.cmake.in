@@ -1,0 +1,65 @@
+# SPDX-FileCopyrightText: 2026 Blender Authors
+#
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+# Remove external-volume metadata after all resources have been installed.
+file(GLOB_RECURSE _metadata "${CMAKE_INSTALL_PREFIX}/Blender.app/._*")
+if(_metadata)
+  file(REMOVE ${_metadata})
+endif()
+
+# Explicit configuration takes precedence over the identity provided by Xcode.
+if("$ENV{CODE_SIGNING_ALLOWED}" STREQUAL "NO")
+  message(STATUS "Preparing unsigned iOS runtime libraries (CODE_SIGNING_ALLOWED=NO)")
+  return()
+endif()
+set(_identity [==[@BLENDER_IOS_SIGNING_IDENTITY@]==])
+if(NOT _identity)
+  set(_identity "$ENV{EXPANDED_CODE_SIGN_IDENTITY}")
+endif()
+if(NOT _identity OR _identity STREQUAL "-")
+  message(FATAL_ERROR
+    "No iOS library signing identity. Configure BLENDER_IOS_SIGNING_IDENTITY "
+    "(build_ipad.py configure --signing-identity CERTIFICATE_SHA1), or run the "
+    "install target from Xcode with a development team selected.")
+endif()
+
+file(GLOB _libraries
+  "${CMAKE_INSTALL_PREFIX}/@TARGETDIR_LIB@/*.*"
+  "${CMAKE_INSTALL_PREFIX}/@TARGETDIR_VER@/python/bin/*.*")
+file(GLOB_RECURSE _numpy_libraries
+  "${CMAKE_INSTALL_PREFIX}/@TARGETDIR_VER@/python/lib/python@PYTHON_VERSION@/site-packages/numpy/*.so")
+list(APPEND _libraries ${_numpy_libraries})
+file(GLOB _frameworks "${CMAKE_INSTALL_PREFIX}/Blender.app/Frameworks/*.framework")
+list(APPEND _libraries ${_frameworks})
+# AppleDouble sidecars on external volumes are metadata, not native libraries.
+list(FILTER _libraries EXCLUDE REGEX "/\\._[^/]*$")
+foreach(_library IN LISTS _libraries)
+  execute_process(
+    COMMAND codesign --sign "${_identity}" --force "${_library}"
+    RESULT_VARIABLE _result
+    ERROR_VARIABLE _error)
+  if(NOT _result STREQUAL "0")
+    message(FATAL_ERROR "Could not sign ${_library}: ${_error}")
+  endif()
+endforeach()
+
+# Xcode signs the target before CMake installs runtime resources. Refresh the
+# app signature last, retaining the provisioning entitlements from that build.
+set(_app "${CMAKE_INSTALL_PREFIX}/Blender.app")
+if(EXISTS "${_app}")
+  execute_process(
+    COMMAND codesign --sign "${_identity}" --force
+      --preserve-metadata=entitlements,requirements,flags
+      --generate-entitlement-der "${_app}"
+    RESULT_VARIABLE _result ERROR_VARIABLE _error)
+  if(NOT _result STREQUAL "0")
+    message(FATAL_ERROR "Could not sign installed app ${_app}: ${_error}")
+  endif()
+  execute_process(
+    COMMAND codesign --verify --deep --strict "${_app}"
+    RESULT_VARIABLE _result ERROR_VARIABLE _error)
+  if(NOT _result STREQUAL "0")
+    message(FATAL_ERROR "Installed app signature verification failed: ${_error}")
+  endif()
+endif()

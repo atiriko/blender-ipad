@@ -558,6 +558,8 @@ if(WITH_INTERNATIONAL)
   set(_locale_target_dir ${TARGETDIR_VER}/datafiles/locale)
 
   file(GLOB _po_files "${_locale_dir}/po/*.po")
+  # External volumes may contain AppleDouble metadata alongside translations.
+  list(FILTER _po_files EXCLUDE REGEX "/\\._[^/]*$")
   foreach(_po_file ${_po_files})
     msgfmt_simple(${_po_file} _all_mo_files)
   endforeach()
@@ -1843,11 +1845,13 @@ elseif(APPLE)
       ${TARGETDIR_VER}/python/lib
     )
 
-    # Install Python executable.
-    install(
-      PROGRAMS ${PYTHON_EXECUTABLE}
-      DESTINATION ${TARGETDIR_VER}/python/bin
-    )
+    # The build-host interpreter is a macOS binary, never an iOS app resource.
+    if(NOT WITH_APPLE_CROSSPLATFORM)
+      install(
+        PROGRAMS ${PYTHON_EXECUTABLE}
+        DESTINATION ${TARGETDIR_VER}/python/bin
+      )
+    endif()
 
     # Needed for `distutils/pip`.
     # Get the last part of the include dir, will be `python{version}{abiflag}`.
@@ -1859,47 +1863,45 @@ elseif(APPLE)
     unset(_py_inc_suffix)
   endif()
 
+  if(WITH_APPLE_CROSSPLATFORM AND BLENDER_IOS_PYTHON_FRAMEWORK)
+    install(DIRECTORY ${BLENDER_IOS_PYTHON_FRAMEWORK}
+      DESTINATION Blender.app/Frameworks)
+    install(CODE "
+      execute_process(
+        COMMAND \"${PYTHON_EXECUTABLE}\"
+          \"${CMAKE_SOURCE_DIR}/build_files/utils/prepare_ios_python.py\"
+          --app \"\${CMAKE_INSTALL_PREFIX}/Blender.app\"
+          --python-relative \"Assets/${BLENDER_VERSION}/python/lib/python${PYTHON_VERSION}\"
+          --bundle-id \"${BLENDER_IOS_BUNDLE_ID}\"
+        RESULT_VARIABLE _python_package_result)
+      if(NOT _python_package_result STREQUAL \"0\")
+        message(FATAL_ERROR \"Could not package the iOS Python extensions\")
+      endif()
+    ")
+  endif()
+
   if(PLATFORM_BUNDLED_LIBRARIES AND TARGETDIR_LIB)
+    if(WITH_APPLE_CROSSPLATFORM AND NOT WITH_CYCLES_OSL)
+      # Remove stale copies from earlier installs; disabled OSL depends on
+      # LLVM runtime libraries that are intentionally absent from the app.
+      install(CODE "
+        file(REMOVE
+          \"\${CMAKE_INSTALL_PREFIX}/${TARGETDIR_LIB}/liboslcomp.dylib\"
+          \"\${CMAKE_INSTALL_PREFIX}/${TARGETDIR_LIB}/liboslexec.dylib\"
+          \"\${CMAKE_INSTALL_PREFIX}/${TARGETDIR_LIB}/liboslnoise.dylib\"
+          \"\${CMAKE_INSTALL_PREFIX}/${TARGETDIR_LIB}/liboslquery.dylib\")
+      ")
+    endif()
     install(
       FILES ${PLATFORM_BUNDLED_LIBRARIES}
       DESTINATION ${TARGETDIR_LIB}
     )
     if(WITH_APPLE_CROSSPLATFORM)
-      message(STATUS "IOS_FIXME: PLATFORM_BUNDLED_LIBRARIES=${PLATFORM_BUNDLED_LIBRARIES}")
-      # Ensure dylibs are signed. We extract the codesigning identity from the system and format it correctly for the signing call.
-      set(EXTRACT_CODESIGN_IDENTITY_CMD "
-      execute_process(COMMAND security find-identity -v -p codesigning
-                      COMMAND sed -n 1p
-                      COMMAND sed \"s/\\\"//g\"
-                      COMMAND awk \"{$1=$2=\\\"\\\"; print $0}\"
-                      COMMAND awk \"{$1=$1};1\"
-                      OUTPUT_VARIABLE EXTRACT_CODESIGN_IDENTITY
-                      OUTPUT_STRIP_TRAILING_WHITESPACE)")
-      install(CODE "
-      ${EXTRACT_CODESIGN_IDENTITY_CMD}
-      # Iterate through all of the libraries copied to the bundle and sign
-      file(GLOB _signing_libraries \${CMAKE_INSTALL_PREFIX}/${TARGETDIR_LIB}/*.*)
-      foreach(f \${_signing_libraries})
-        message(\"Signing \${f} with signing identity: '\${EXTRACT_CODESIGN_IDENTITY}'\")
-        execute_process(COMMAND codesign -s \"\${EXTRACT_CODESIGN_IDENTITY}\" --options runtime -f \${f})
-      endforeach()")
-      # Ensure python dylib is signed
-      install(CODE "
-      ${EXTRACT_CODESIGN_IDENTITY_CMD}
-      file(GLOB _signing_libraries \${CMAKE_INSTALL_PREFIX}/${TARGETDIR_VER}/python/bin/*.*)
-      foreach(f \${_signing_libraries})
-        message(\"Signing \${f} with signing identity: '\${EXTRACT_CODESIGN_IDENTITY}'\")
-        execute_process(COMMAND codesign -s \"\${EXTRACT_CODESIGN_IDENTITY}\" --options runtime -f \${f})
-      endforeach()")
-      # Ensure numpy so is signed
-      install(CODE "
-      ${EXTRACT_CODESIGN_IDENTITY_CMD}
-      file(GLOB_RECURSE _signing_libraries ${CMAKE_INSTALL_PREFIX}/${TARGETDIR_VER}/python/lib/python${PYTHON_VERSION}/site-packages/numpy/*.so)
-      foreach(f \${_signing_libraries})
-        message(\"Signing \${f} with signing identity: '\${EXTRACT_CODESIGN_IDENTITY}'\")
-        execute_process(COMMAND codesign -s \"\${EXTRACT_CODESIGN_IDENTITY}\" --options runtime -f \${f})
-      endforeach()
-      ")
+      configure_file(
+        ${CMAKE_SOURCE_DIR}/build_files/cmake/platform/ios_sign_libraries.cmake.in
+        ${CMAKE_CURRENT_BINARY_DIR}/ios_sign_libraries.cmake
+        @ONLY
+      )
     endif()
   endif()
 
@@ -2305,4 +2307,9 @@ endif()
 
 if(POSTINSTALL_SCRIPT)
   install(SCRIPT ${POSTINSTALL_SCRIPT})
+endif()
+
+# Sign only after every resource and extension has been installed.
+if(WITH_APPLE_CROSSPLATFORM AND PLATFORM_BUNDLED_LIBRARIES AND TARGETDIR_LIB)
+  install(SCRIPT ${CMAKE_CURRENT_BINARY_DIR}/ios_sign_libraries.cmake)
 endif()

@@ -1,98 +1,120 @@
-# Personal Blender iPad port
+# Blender for iPad (`personal-ipad`)
 
-This workspace contains the official experimental `ios` branch, based on Blender
-5.1.2, checked out at `a1de44dd54af75a4c8c4a29a5fed2a1334a87446`.
-It is a starting point for a native port, not a tested or finished iPad application.
+This repository is a working iPadOS port of Blender 5.1.2 based on the upstream experimental [`ios` branch](https://projects.blender.org/blender/blender/src/branch/ios) (`a1de44dd54af75a4c8c4a29a5fed2a1334a87446`), with fixes and enhancements for building, signing, and running natively on arm64 iPads.
 
-## Build on a Mac
+## Key Enhancements Over Upstream `ios`
 
-Use an Apple Silicon Mac for this initial workflow. Intel Macs require a separate
-host-dependency setup and are not handled by the helper. Install full Xcode with
-an iOS SDK that supports deployment/debugging on your iPadOS version. Launch Xcode
-once to complete installation and add your Apple account under Settings → Accounts.
-Install CMake, Git LFS, and Python 3; if you use Homebrew:
+- **Python 3.13 iOS Runtime & Extension Packaging**: Resolves the upstream Python 3.11 / 3.13 mismatch by fetching a checksum-pinned BeeWare Python 3.13 iOS framework and NumPy wheel, packaging `.so` C-extensions as iOS `.framework` bundles with `.fwork` markers, and setting `config.executable` to the app binary so `AppleFrameworkLoader` resolves extension modules at startup.
+- **Apple Pencil & Touch Input Fixes**:
+  - Routes Apple Pencil strokes directly through `touchesBegan` / `touchesMoved` / `touchesEnded` with coalesced touch samples (`coalescedTouchesForTouch:`) and precise coordinates.
+  - Initializes stylus pressure and tilt at initial contact rather than waiting for movement.
+  - Tracks active Pencil touches independently of finger touches so lifting a finger does not reset stylus state.
+  - Suppresses finger gesture recognizers during an active Pencil stroke and releases held mouse/stylus buttons cleanly on touch cancellation or app resignation.
+  - Balances Apple Pencil double-tap (`PENCIL_TAP`) right-click press/release events.
+  - Fixes 3D Viewport orbit and pan gizmos so direct Pencil and mouse drags work alongside two-finger multitouch navigation.
+- **Writable Sandbox Paths & Native File Sharing**:
+  - Fixes a dangling `c_str()` pointer in `BKE_appdir_folder_default_or_root()` and defaults file operations to the app sandbox's writable `Documents` directory.
+  - Redirects unwritable or read-only save paths to `Documents` and presents the native iPadOS `UIActivityViewController` share sheet ("Save to Files", AirDrop, etc.) after completed save/export operations.
+- **Floating Touch Shortcuts Strip**:
+  - Adds a customizable viewport gizmo toolbar (`space_view3d_ipad.py`) with quick touch buttons for Undo, Redo, Move, Rotate, Scale, Frame Selected, Edit Mode toggle, mode-aware Context Menu, Save, Zoom, mesh tools, and custom Blender operator IDs with JSON properties.
+  - Persists user configuration in `ipad_shortcuts.json` inside Blender's user config directory.
+- **Configurable Code Signing & Build Helper**:
+  - Adds `build_ipad.py` and CMake options (`BLENDER_IOS_BUNDLE_ID`, `BLENDER_IOS_DEVELOPMENT_TEAM`, `BLENDER_IOS_SIGNING_IDENTITY`, `BLENDER_IOS_INCREASED_MEMORY_LIMIT`) to build and sign bundled dynamic libraries, frameworks, and the final `.app` bundle without hardcoding team IDs.
 
-```sh
-brew install cmake git-lfs python
-```
+---
 
-Clone your fork on the Mac. Use a path without spaces because upstream host-tool
-commands do not safely handle spaces. The build folder is created alongside the
-source checkout as `../build_ios`.
+## Requirements
+
+- **Apple Silicon Mac** (macOS) with full **Xcode** and the iOS SDK installed.
+- **CMake**, **Git LFS**, and **Python 3**:
+  ```sh
+  brew install cmake git-lfs python
+  ```
+- An arm64 iPad with Developer Mode enabled and an Apple Developer / personal signing team configured in Xcode (`Settings → Accounts`).
+
+---
+
+## Quick Start: Build & Run on iPad
+
+Clone this repository to a path **without spaces** (upstream host-tool build scripts do not support spaces in paths). The build directory is created alongside the checkout at `../build_ios`.
 
 ```sh
 GIT_LFS_SKIP_SMUDGE=1 git clone --branch personal-ipad --single-branch https://github.com/atiriko/blender-ipad.git ~/blender-ipad
+cd ~/blender-ipad
 ```
+
+### 1. Download dependencies and prepare the iOS Python 3.13 runtime
 
 ```sh
-cd ~/blender-ipad
 python3 build_ipad.py setup
-python3 build_ipad.py configure --bundle-id personal.yourname.blender
-open ../build_ios/Blender.xcodeproj
 ```
 
-`setup` configures the official Blender LFS server for upstream assets (the GitHub
-mirror does not host them) and downloads both macOS and iOS dependencies at the
-revisions recorded by this checkout. It does not update the Blender branch.
-Expect substantial downloads and build disk usage.
+`setup` configures the official Blender Git LFS endpoint for runtime assets, checks out the pinned `lib/macos_arm64` and `lib/ios_arm64` precompiled library submodules, and prepares the Python 3.13 iOS runtime, NumPy wheel, and `fmt` 9.1 headers under `.local/`.
 
-In Xcode, select the `blender` target, open Signing & Capabilities, select your
-team, and enable automatic signing. Alternatively pass `--team YOUR_TEAM_ID`
-to the configure command. Use your own unique bundle identifier. Connect and
-trust the iPad, enable Developer Mode if Xcode requests it, and select it as the
-destination. Build the `install` scheme in Release to copy runtime scripts and
-libraries; then select the `blender` scheme and run it on the device. The port
-automatically builds native macOS code-generation tools while compiling.
+### 2. Configure the Xcode project
 
-For a terminal build after configuring signing:
+```sh
+python3 build_ipad.py configure \
+  --bundle-id personal.yourname.blender \
+  --team YOUR_TEAM_ID \
+  --signing-identity YOUR_CERTIFICATE_SHA1
+```
+
+- Replace `personal.yourname.blender` with your own unique bundle identifier.
+- `--team` and `--signing-identity` are optional if you prefer to configure signing inside Xcode (`open ../build_ios/Blender.xcodeproj`), or if you are performing an unsigned build first.
+- Add `--increased-memory` if your provisioning profile supports the `com.apple.developer.kernel.increased-memory-limit` entitlement.
+
+### 3. Build and install
+
+From the terminal (with a valid signing identity configured):
 
 ```sh
 python3 build_ipad.py build --jobs 4
 ```
 
-Upstream's runtime-library installation selects the first available code-signing
-identity. On a Mac with multiple identities, verify that the installed libraries
-and app are signed for the intended team if deployment fails. This remains an
-upstream limitation; this workspace has not been built on macOS yet.
+*(Note: `--jobs` defaults to `1` so large geometry-node unity builds succeed on 8 GB Macs; increase `--jobs` on Macs with 16 GB+ RAM.)*
 
-The helper disables the increased-memory entitlement by default to allow a first
-attempt with a personal signing team. If your provisioning profile supports it,
-configure again with `--increased-memory` for the M5 device. Ordinary device
-memory limits still apply without it. No Apple credentials are stored here.
+To verify compilation without code signing:
 
-## Device targets and validation
+```sh
+python3 build_ipad.py build --unsigned --jobs 4
+```
 
-- M5 iPad Pro: first target, using Pencil and touch. Hardware, SDK, and runtime
-  behavior still need verification on the actual device.
-- iPad Air 3: secondary compatibility target. It has an A12 chip and supports
-  first-generation Pencil. Apple's iPadOS 27 list excludes it; confirm its model
-  and OS before choosing the final compatibility target. This source currently
-  sets a minimum deployment target of iOS 16, but that does not guarantee GPU
-  compatibility or sufficient memory on the Air.
+To deploy and debug from Xcode:
 
-Test on each device before calling this a working port:
+```sh
+open ../build_ios/Blender.xcodeproj
+```
 
-1. Launch to the default cube; rotate the device and navigate the viewport.
-2. Select and transform an object using touch/Pencil; exercise pinch and pan.
-3. Sculpt a small mesh and verify Pencil pressure, undo, and redo.
-4. Save to the app's Documents folder, find it under Files → On My iPad → Blender,
-   quit, relaunch, and reopen it. Do not assume cloud file handling works yet.
-5. Check a small Workbench/EEVEE scene, then independently test Cycles availability.
-6. Background/resume and try increasing scene sizes while watching for crashes.
+1. Select your connected **iPad** as the run destination (do not select an iOS Simulator).
+2. Build the **`install`** scheme in `Release` configuration so runtime scripts, assets, Python frameworks, and signed libraries are packaged into `Blender.app`.
+3. Select the **`blender`** scheme and run it on your iPad.
 
-Touch navigation, pressure input, Files sharing, and Metal code exist upstream;
-their presence is not evidence that they work on these two devices. Several
-features are explicitly disabled in the iOS build, including USD, OSL, audio
-through Audaspace, and OpenXR.
+---
 
-## Local changes
+## Running Automated Regression Checks on macOS
 
-The local patch adds configurable bundle ID, signing team, and a choice of memory
-entitlements. It retains the original touch/Pencil implementation. An unsigned
-or untested app must not be mistaken for an installable, verified build.
+You can run the unit and regression tests for the iOS port directly on macOS:
 
-Sources:
-- https://projects.blender.org/blender/blender/src/branch/ios
-- https://code.blender.org/2025/07/beyond-mouse-keyboard/
-- https://support.apple.com/en-lamr/guide/ipad/ipad213a25b2/27/ipados/27
-- https://support.apple.com/en-bh/111939
+```sh
+python3 tests/ios/test_pencil_input.py
+python3 tests/ios/test_navigation_input.py
+python3 tests/ios/test_file_sharing.py
+python3 tests/ios/test_library_signing.py
+python3 tests/ios/test_python_packaging.py
+```
+
+To test the Touch Shortcuts UI in desktop Blender 5.1+:
+
+```sh
+blender --background --factory-startup --python tests/ios/test_touch_shortcuts.py
+```
+
+---
+
+## Upstream References
+
+- [Blender Official Repository (`ios` branch)](https://projects.blender.org/blender/blender/src/branch/ios)
+- [Blender Blog: Beyond Mouse & Keyboard](https://code.blender.org/2025/07/beyond-mouse-keyboard/)
+- [BeeWare Python-Apple-support](https://github.com/beeware/Python-Apple-support/releases/tag/3.13-b15)
+- [CPython 3.13 iOS Documentation](https://docs.python.org/3.13/using/ios.html)

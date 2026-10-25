@@ -90,7 +90,7 @@ if(WITH_APPLE_CROSSPLATFORM)
   get_filename_component(CMAKE_BIN_DIRECTORY "${CMAKE_COMMAND}" DIRECTORY)
   add_custom_target(blender_cross_tools_compile
     COMMENT "\n---------------------------\n Building Cross Compile Tools\n"
-    COMMAND env -i PATH="${CMAKE_BIN_DIRECTORY}:$ENV{PATH}" BUILD_CMAKE_ARGS=${CMAKE_TOOLS_ARGS} BUILD_DIR=${CROSSCOMPILE_TOOLDIR} make tools
+    COMMAND env -i HOME="$ENV{HOME}" PATH="${CMAKE_BIN_DIRECTORY}:$ENV{PATH}" BUILD_CMAKE_ARGS=${CMAKE_TOOLS_ARGS} BUILD_DIR=${CROSSCOMPILE_TOOLDIR} make tools
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   )
 
@@ -207,23 +207,29 @@ if(NOT WITH_APPLE_CROSSPLATFORM)
   endif()
 
 else()
-  # When building for iOS we use the MacOS version of Python from the macos libs dir
+  # Build scripts run on macOS; Python headers and libraries must target iOS.
   set(CROSSCOMPILE_HOST_LIBDIR "${CMAKE_SOURCE_DIR}/lib/macos_arm64")
-  if(NOT PYTHON_VERSION)
-    set(PYTHON_VERSION 3.13)
-    # IOS_FIXME: This is not great why is PYTHON_VERSION not defined here?
-    message("WARNING Manually defining Python Version to 3.13 for iOS build")
-    set(PYTHON_EXECUTABLE "${CROSSCOMPILE_HOST_LIBDIR}/python/bin/python3.13")
+  set(PYTHON_VERSION 3.13 CACHE STRING "Python Version (major and minor only)" FORCE)
+  set(PYTHON_EXECUTABLE "${CROSSCOMPILE_HOST_LIBDIR}/python/bin/python${PYTHON_VERSION}")
+  set(BLENDER_IOS_PYTHON_ROOT "" CACHE PATH "Python 3.13 iOS runtime root")
+  if(BLENDER_IOS_PYTHON_ROOT)
+    set(PYTHON_INCLUDE_DIR "${BLENDER_IOS_PYTHON_ROOT}/include/python${PYTHON_VERSION}")
+    set(PYTHON_INCLUDE_CONFIG_DIR "${PYTHON_INCLUDE_DIR}")
+    set(PYTHON_LIBPATH "${BLENDER_IOS_PYTHON_ROOT}/lib")
+    set(PYTHON_LIBRARY "${BLENDER_IOS_PYTHON_ROOT}/Python.framework/Python")
+    set(BLENDER_IOS_PYTHON_FRAMEWORK "${BLENDER_IOS_PYTHON_ROOT}/Python.framework")
+    foreach(_python_file "${PYTHON_LIBRARY}" "${PYTHON_INCLUDE_DIR}/Python.h"
+                         "${PYTHON_INCLUDE_DIR}/pyconfig.h")
+      if(NOT EXISTS "${_python_file}")
+        message(FATAL_ERROR "Incomplete iOS Python runtime: ${_python_file}")
+      endif()
+    endforeach()
   else()
-    set(PYTHON_EXECUTABLE "${CROSSCOMPILE_HOST_LIBDIR}/python/bin/python${PYTHON_VERSION}")
+    set(PYTHON_INCLUDE_DIR "${LIBDIR}/python/include/python${PYTHON_VERSION}")
+    set(PYTHON_INCLUDE_CONFIG_DIR "${PYTHON_INCLUDE_DIR}")
+    set(PYTHON_LIBPATH "${LIBDIR}/python/lib")
+    set(PYTHON_LIBRARY "${PYTHON_LIBPATH}/libpython${PYTHON_VERSION}.a")
   endif()
-
-  set(PYTHON_INCLUDE_DIR "${LIBDIR}/python/include/python${PYTHON_VERSION}")
-  set(PYTHON_LIBPATH "${LIBDIR}/python/lib")
-
-  set(PYTHON_LIBRARIES
-    "${LIBDIR}/python/lib/libpython${PYTHON_VERSION}.a"
-  )
 
   if(NOT EXISTS ${PYTHON_EXECUTABLE})
     message(
@@ -235,6 +241,7 @@ else()
   endif()
 
   message(STATUS "HOST PYTHON EXECUTABLE: ${PYTHON_EXECUTABLE}")
+  include(${CMAKE_SOURCE_DIR}/build_files/cmake/platform/ios_legacy_dependencies.cmake)
 endif()
 
 # Prefer lib directory paths
@@ -338,7 +345,9 @@ if(WITH_FRIBIDI)
 endif()
 
 # Header dependency of required OpenImageIO.
-find_package(OpenEXR REQUIRED)
+if(NOT WITH_APPLE_CROSSPLATFORM)
+  find_package(OpenEXR REQUIRED)
+endif()
 add_bundled_libraries(openexr/lib)
 add_bundled_libraries(imath/lib)
 
@@ -349,8 +358,12 @@ if(WITH_CODEC_FFMPEG)
     mp3lame ogg opus swresample swscale
     theora theoradec theoraenc vorbis vorbisenc
     vorbisfile vpx x264)
-  # Frameworks required by libavfilter, using legacy macOS CGL
-  string(APPEND PLATFORM_LINKFLAGS " -framework CoreImage -framework OpenGL")
+  if(WITH_APPLE_CROSSPLATFORM)
+    # The pinned device bundle has no avfilter; never fall back to a host dylib.
+    list(REMOVE_ITEM FFMPEG_FIND_COMPONENTS avfilter)
+  else()
+    string(APPEND PLATFORM_LINKFLAGS " -framework CoreImage -framework OpenGL")
+  endif()
   if(EXISTS ${LIBDIR}/ffmpeg/lib/libaom.a)
     list(APPEND FFMPEG_FIND_COMPONENTS aom)
   endif()
@@ -434,7 +447,9 @@ set(TIFF_ROOT ${LIBDIR}/tiff)
 find_package(TIFF REQUIRED)
 
 set(fmt_ROOT ${LIBDIR}/fmt)
-find_package(fmt REQUIRED)
+if(NOT WITH_APPLE_CROSSPLATFORM)
+  find_package(fmt REQUIRED)
+endif()
 
 if(WITH_IMAGE_WEBP)
   set(WEBP_ROOT_DIR ${LIBDIR}/webp)
@@ -449,10 +464,12 @@ if(WITH_PUGIXML)
   find_package(PugiXML REQUIRED)
 endif()
 
-find_package(OpenImageIO REQUIRED)
+if(NOT WITH_APPLE_CROSSPLATFORM)
+  find_package(OpenImageIO REQUIRED)
+endif()
 add_bundled_libraries(openimageio/lib)
 
-if(WITH_OPENCOLORIO)
+if(WITH_OPENCOLORIO AND NOT WITH_APPLE_CROSSPLATFORM)
   find_package(OpenColorIO 2.0.0 REQUIRED)
 endif()
 add_bundled_libraries(opencolorio/lib)
@@ -502,7 +519,9 @@ endif()
 if(WITH_CYCLES AND WITH_CYCLES_OSL)
   find_package(OSL 1.13.4 REQUIRED)
 endif()
-add_bundled_libraries(osl/lib)
+if(NOT WITH_APPLE_CROSSPLATFORM OR (WITH_CYCLES AND WITH_CYCLES_OSL))
+  add_bundled_libraries(osl/lib)
+endif()
 # OSL dependency
 add_bundled_libraries(openjph/lib)
 
@@ -583,7 +602,9 @@ if(WITH_CYCLES AND WITH_CYCLES_PATH_GUIDING)
   endif()
 endif()
 
-find_package(Eigen3 REQUIRED CONFIG)
+if(NOT WITH_APPLE_CROSSPLATFORM)
+  find_package(Eigen3 REQUIRED CONFIG)
+endif()
 
 if (WITH_LIBMV)
   find_package(Ceres REQUIRED CONFIG)
@@ -694,7 +715,7 @@ if(PLATFORM_BUNDLED_LIBRARIES)
   # rpath to the location where install step will copy the shared libraries.
   set(CMAKE_SKIP_INSTALL_RPATH FALSE)
   if(WITH_PYTHON_MODULE OR WITH_APPLE_CROSSPLATFORM)
-    list(APPEND CMAKE_INSTALL_RPATH "@loader_path/Assets/lib")
+    list(APPEND CMAKE_INSTALL_RPATH "@loader_path/Assets/lib" "@executable_path/Frameworks")
   else()
     list(APPEND CMAKE_INSTALL_RPATH "@loader_path/../Resources/lib")
   endif()
@@ -728,6 +749,8 @@ if(WITH_APPLE_CROSSPLATFORM)
       "Bundle identifier for a personal iOS build")
     set(BLENDER_IOS_DEVELOPMENT_TEAM "" CACHE STRING
       "Apple development team used to sign the iOS app")
+    set(BLENDER_IOS_SIGNING_IDENTITY "" CACHE STRING
+      "Code signing identity (certificate SHA-1 or name) for bundled iOS libraries")
     option(BLENDER_IOS_INCREASED_MEMORY_LIMIT
       "Request the increased-memory-limit entitlement on supported iPads" ON)
     set(CMAKE_XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "${BLENDER_IOS_BUNDLE_ID}")
