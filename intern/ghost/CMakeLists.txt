@@ -31,6 +31,7 @@ set(SRC
   GHOST_IEvent.hh
   GHOST_IEventConsumer.hh
   GHOST_ISystem.hh
+  GHOST_IOS.hh
   GHOST_ISystemPaths.hh
   GHOST_ITimerTask.hh
   GHOST_IWindow.hh

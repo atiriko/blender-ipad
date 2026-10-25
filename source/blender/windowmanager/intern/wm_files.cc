@@ -3671,6 +3671,13 @@ static void save_set_filepath(bContext *C, wmOperator *op)
     }
 
     wm_filepath_default(bmain, filepath);
+#ifdef WITH_APPLE_CROSSPLATFORM
+    if (!BLI_file_is_writable(filepath)) {
+      char filename[FILE_MAXFILE];
+      STRNCPY(filename, BLI_path_basename(filepath));
+      BLI_path_join(filepath, sizeof(filepath), BKE_appdir_folder_default_or_root(), filename);
+    }
+#endif
     RNA_property_string_set(op->ptr, prop, filepath);
   }
 }
@@ -3912,7 +3919,11 @@ static wmOperatorStatus wm_save_mainfile_invoke(bContext *C,
     }
   }
 
-  if (blendfile_path[0] != '\0') {
+  if (blendfile_path[0] != '\0'
+#ifdef WITH_APPLE_CROSSPLATFORM
+      && BLI_file_is_writable(blendfile_path)
+#endif
+  ) {
     if (BKE_main_needs_overwrite_confirm(CTX_data_main(C))) {
       wm_save_file_overwrite_dialog(C, op);
       ret = OPERATOR_INTERFACE;
