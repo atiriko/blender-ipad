@@ -497,6 +497,13 @@ void BPY_python_start(bContext *C, int argc, const char **argv)
       pystatus_exit_on_error(status);
     }
 
+#  ifdef WITH_APPLE_CROSSPLATFORM
+    /* iOS framework imports resolve .fwork markers relative to sys.executable.
+     * Use the app executable; iOS does not provide a Python subprocess. */
+    status = PyConfig_SetBytesString(&config, &config.executable, BKE_appdir_program_path());
+    pystatus_exit_on_error(status);
+    has_python_executable = true;
+#  else
     /* Setting the program name is important so the 'multiprocessing' module
      * can launch new Python instances. */
     {
@@ -515,6 +522,8 @@ void BPY_python_start(bContext *C, int argc, const char **argv)
                 "the multiprocessing module may not be functional!\n");
       }
     }
+
+#  endif
 
     /* Allow to use our own included Python. `py_path_bundle` may be nullptr. */
     {
